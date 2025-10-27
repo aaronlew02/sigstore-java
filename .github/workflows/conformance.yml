@@ -4,14 +4,26 @@ permissions:
 
 on:
   push:
-    branches: [main]
+    branches: [main, rekor2-refactor]
   pull_request: {}
-  workflow_dispatch: {}
   # TODO: add cron
 
 jobs:
-  build:
-    name: Build sigstore-java cli and server jar
+  conformance:
+    strategy:
+      max-parallel: 1
+      matrix:
+        java-version: [11, 17]
+        sigstore-env: [production, staging]
+      fail-fast: false
+
+    concurrency:
+      # On main/release, we don't want any jobs cancelled
+      # On PR branches, we cancel the job if new commits are pushed
+      # More info: https://stackoverflow.com/a/70972844/1261287
+      group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}-${{ matrix.java-version }}-${{ matrix.sigstore-env }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -30,39 +42,6 @@ jobs:
       - name: Build sigstore-java cli and server jar
         run: ./gradlew :sigstore-cli:serverShadowJar
       
-      - name: Upload JAR artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sigstore-jar
-          path: ${{ github.workspace }}/sigstore-cli/build/libs/sigstore-cli-server-all.jar
-          retention-days: 1
-
-  conformance:
-    needs: build
-    
-    strategy:
-      max-parallel: 1
-      matrix:
-        java-version: [11, 17]
-        sigstore-env: [production, staging]
-      fail-fast: false
-
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}-${{ matrix.java-version }}-${{ matrix.sigstore-env }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          persist-credentials: false
-
-      - name: Download server jar
-        uses: actions/download-artifact@v4
-        with:
-          name: sigstore-jar
-          path: ${{ github.workspace }}/sigstore-cli/build/libs/
-      
       - name: Start test server in background
         run: java -jar ${{ github.workspace }}/sigstore-cli/build/libs/sigstore-cli-server-all.jar &
       
@@ -75,7 +54,7 @@ jobs:
           java-version: ${{ matrix.java-version }}
           distribution: 'temurin'
 
-      - uses: sigstore/sigstore-conformance@244638a7a138ae9f6106cfe2d44a698eccd3bef7 # v0.0.21
+      - uses: sigstore/sigstore-conformance@72154f18dd6301133de457b06575d60351b6a474 # v0.0.21
         with:
           entrypoint: ${{ github.workspace }}/sigstore-cli/sigstore-cli-server
           environment: ${{ matrix.sigstore-env }}
