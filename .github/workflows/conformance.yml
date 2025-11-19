@@ -10,7 +10,35 @@ on:
   pull_request: {}
 
 jobs:
+  build:
+    name: Build sigstore-java cli and server jar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          java-version: 21
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
+
+      - name: Build sigstore-java cli and server jar
+        run: ./gradlew :sigstore-cli:serverShadowJar
+      
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sigstore-jar
+          path: ${{ github.workspace }}/sigstore-cli/build/libs/sigstore-cli-server-all.jar
+          retention-days: 1
+
   conformance:
+    needs: build
     strategy:
       matrix:
         java-version: [11, 17, 21]
@@ -30,17 +58,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+      - name: Download server jar
+        uses: actions/download-artifact@v4
         with:
-          java-version: 21
-          distribution: 'temurin'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
-
-      - name: Build sigstore-java cli and server jar
-        run: ./gradlew -Porg.gradle.java.installations.auto-download=false :sigstore-cli:serverShadowJar
+          name: sigstore-jar
+          path: ${{ github.workspace }}/sigstore-cli/build/libs/
 
       - name: Start test server in background
         run: java -jar ${{ github.workspace }}/sigstore-cli/build/libs/sigstore-cli-server-all.jar &
