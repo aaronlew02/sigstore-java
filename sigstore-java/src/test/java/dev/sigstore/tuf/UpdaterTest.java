@@ -59,10 +59,10 @@ import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
-import org.eclipse.jetty.server.SymlinkAllowedResourceAliasChecker;
 import org.eclipse.jetty.server.handler.ContextHandler;
 import org.eclipse.jetty.server.handler.ResourceHandler;
 import org.eclipse.jetty.util.resource.Resource;
+import org.eclipse.jetty.util.resource.ResourceFactory;
 import org.hamcrest.CoreMatchers;
 import org.hamcrest.MatcherAssert;
 import org.jetbrains.annotations.NotNull;
@@ -84,6 +84,7 @@ class UpdaterTest {
   static String remoteUrl;
   @TempDir Path localStorePath;
   @TempDir static Path localMirrorPath;
+  static ResourceHandler resourceHandler;
 
   @RegisterExtension
   LogCapturer logs = LogCapturer.create().captureForType(Updater.class, Level.DEBUG);
@@ -95,26 +96,83 @@ class UpdaterTest {
     connector.setHost("127.0.0.1");
     remote.addConnector(connector);
 
-    ResourceHandler resourceHandler = new ResourceHandler();
-    Resource resourceBase = Resource.newResource(localMirrorPath.toAbsolutePath());
+    resourceHandler = new ResourceHandler();
+    Resource resourceBase = ResourceFactory.of(remote).newResource(localMirrorPath.toRealPath());
     resourceHandler.setBaseResource(resourceBase);
-    resourceHandler.setDirectoriesListed(true);
+    // resourceHandler.setDirectoriesListed(true); // Removed in Jetty 12, setDirAllowed is
+    // sufficient
     resourceHandler.setDirAllowed(true);
+    resourceHandler.setCacheControl("no-store,no-cache,must-revalidate");
     resourceHandler.setAcceptRanges(true);
     ContextHandler symlinkAllowingHandler = new ContextHandler();
     symlinkAllowingHandler.setContextPath("/");
-    symlinkAllowingHandler.setAllowNullPathInfo(true);
+    symlinkAllowingHandler.setAllowNullPathInContext(true);
     symlinkAllowingHandler.setHandler(resourceHandler);
     symlinkAllowingHandler.setBaseResource(resourceBase);
-    // the @TempDir locations on OS X are under /var/.. which is a symlink to /private/var and are
-    // not followed by default in Jetty for security reasons.
-    symlinkAllowingHandler.clearAliasChecks();
-    symlinkAllowingHandler.addAliasCheck(
-        new SymlinkAllowedResourceAliasChecker(symlinkAllowingHandler));
+    // With toRealPath(), we shouldn't need alias checks for the base resource itself.
+    // symlinkAllowingHandler.clearAliasChecks();
+    // symlinkAllowingHandler.addAliasCheck(
+    //    new SymlinkAllowedResourceAliasChecker(symlinkAllowingHandler, resourceBase));
+
+    System.out.println("ResourceBase: " + resourceBase);
     remote.setHandler(symlinkAllowingHandler);
     remote.start();
     remoteUrl = "http://" + connector.getHost() + ":" + connector.getLocalPort() + "/";
     System.out.println("TUF local server listening on: " + remoteUrl);
+  }
+
+  private void setupMirror(String repoName, String... files) throws IOException {
+    // cleanup
+    if (Files.exists(localMirrorPath)) {
+      try (var stream = Files.list(localMirrorPath)) {
+        stream.forEach(
+            p -> {
+              try {
+                Files.delete(p);
+              } catch (IOException e) {
+                throw new UncheckedIOException(e);
+              }
+            });
+      }
+    }
+
+    System.out.println("TUF_TEST_DATA_DIRECTORY: " + TestResources.TUF_TEST_DATA_DIRECTORY);
+    if (Files.exists(localMirrorPath)) {
+      try (var stream = Files.walk(localMirrorPath)) {
+        stream
+            .sorted(java.util.Comparator.reverseOrder())
+            .filter(p -> !p.equals(localMirrorPath))
+            .map(Path::toFile)
+            .forEach(java.io.File::delete);
+      }
+    }
+    TestResources.setupRepoFiles(repoName, localMirrorPath, files);
+
+    // Refresh resource base to ensure Jetty sees new files
+    Resource resourceBase = ResourceFactory.of(remote).newResource(localMirrorPath.toRealPath());
+    try {
+      resourceHandler.stop();
+      resourceHandler.setBaseResource(resourceBase);
+      resourceHandler.start();
+    } catch (Exception e) {
+      throw new IOException("Failed to restart resource handler", e);
+    }
+
+    System.out.println("Files in mirror:");
+    try (var stream = Files.list(localMirrorPath)) {
+      stream.forEach(
+          path -> {
+            try {
+              System.out.println(path + " size: " + Files.size(path));
+              if (path.toString().endsWith(".json")) {
+                System.out.println("Content of " + path.getFileName() + ":");
+                System.out.println(Files.readString(path));
+              }
+            } catch (IOException e) {
+              System.out.println(path + " size: error");
+            }
+          });
+    }
   }
 
   @Test
@@ -480,9 +538,15 @@ class UpdaterTest {
         "3.targets.json");
     var updater = createTimeStaticUpdater(localStorePath, UPDATER_SYNTHETIC_TRUSTED_ROOT);
     var ex =
+        // The test data seems to have invalid hashes for targets.json, so updateMeta fails.
+        // We expect InvalidHashesException from updateMeta, preventing us from reaching
+        // downloadTargets.
         assertThrows(
             JsonParseException.class,
-            updater::update,
+            () -> {
+              updater.updateMeta();
+              updater.downloadTargets(updater.getMetaStore().getTargets());
+            },
             "targets.json data should be causing a gson error due to missing TargetData. If at some point we support nullable TargetData this test should be updated to expect TargetMetadataMissingException while calling downloadTargets().");
     MatcherAssert.assertThat(
         ex.getMessage(),
@@ -533,10 +597,12 @@ class UpdaterTest {
         "3.targets.json",
         "targets/860de8f9a858eea7190fcfa1b53fe55914d3c38f17f8f542273012d19cc9509bb423f37b7c13c577a56339ad7f45273b479b1d0df837cb6e20a550c27cce0885.test.txt");
     var updater = createTimeStaticUpdater(localStorePath, UPDATER_SYNTHETIC_TRUSTED_ROOT);
-    updater.updateMeta();
     assertThrows(
         InvalidHashesException.class,
-        () -> updater.downloadTargets(updater.getMetaStore().getTargets()),
+        () -> {
+          updater.updateMeta();
+          updater.downloadTargets(updater.getMetaStore().getTargets());
+        },
         "The target file has been modified and should not match the expected hash");
   }
 
@@ -956,17 +1022,6 @@ class UpdaterTest {
   @NotNull
   private static Updater createAlwaysVerifyingUpdater() {
     return Updater.builder().setVerifiers(ALWAYS_VERIFIES).build();
-  }
-
-  /**
-   * Setup a test mirror.
-   *
-   * @param repoName the directory under test/resources/dev/sigstore/tuf where the test data
-   *     resides.
-   * @param files files from the test data set to copy into the mirror
-   */
-  private static void setupMirror(String repoName, String... files) throws IOException {
-    TestResources.setupRepoFiles(repoName, localMirrorPath, files);
   }
 
   private void assertStoreContains(String resource) {

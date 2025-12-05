@@ -54,13 +54,15 @@ dependencies {
     testImplementation("no.nav.security:mock-oauth2-server:0.5.10")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("net.sourceforge.htmlunit:htmlunit:2.70.0")
-    testImplementation("org.eclipse.jetty:jetty-server:11.0.26")
+    testImplementation("org.eclipse.jetty:jetty-server:12.1.4")
 
     testImplementation("io.github.netmikey.logunit:logunit-core:2.0.0")
     testRuntimeOnly("io.github.netmikey.logunit:logunit-jul:2.0.0")
+    testRuntimeOnly("org.slf4j:slf4j-jdk14:2.0.16")
 }
 
 protobuf {
+
     protoc {
         artifact = "com.google.protobuf:protoc:4.30.2"
     }
@@ -130,4 +132,11 @@ tasks.named("sourcesJar") {
 
 tasks.generateBuildInfo {
     packageName.set("dev.sigstore.buildinfo")
+}
+
+tasks.named<Test>("test") {
+    testLogging {
+        showStandardStreams = true
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
 }
