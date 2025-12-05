@@ -39,9 +39,12 @@ public class TestResources {
     for (String file : files) {
       Path destinationFilePath = destinationDir.resolve(file);
       Files.createDirectories(destinationFilePath.getParent());
-      Files.copy(
-          TestResources.TUF_TEST_DATA_DIRECTORY.resolve(repoName).resolve(file),
-          destinationFilePath);
+      Path source = TestResources.TUF_TEST_DATA_DIRECTORY.resolve(repoName).resolve(file);
+      System.out.println("Copying from: " + source);
+      if (Files.exists(source)) {
+        System.out.println("Source content: " + Files.readString(source));
+      }
+      Files.copy(source, destinationFilePath);
     }
   }
 
