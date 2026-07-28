@@ -77,6 +77,9 @@ protobuf {
     }
     generateProtoTasks {
         ofSourceSet("main").configureEach {
+            doFirst {
+                delete(file("build/extracted-protos/main/sigstore_common.proto"))
+            }
             plugins {
                 id("grpc")
             }
