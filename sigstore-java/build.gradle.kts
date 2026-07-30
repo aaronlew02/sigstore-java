@@ -140,3 +140,7 @@ tasks.named("sourcesJar") {
 tasks.generateBuildInfo {
     packageName.set("dev.sigstore.buildinfo")
 }
+
+tasks.matching { it.name == "processProtoResources" || it.name == "processTestProtoResources" }.configureEach {
+    enabled = false
+}
