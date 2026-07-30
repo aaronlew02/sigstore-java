@@ -1,0 +1,1 @@
+sigstore-java v2 test artifact d945e4d9-dc6c-49b5-a491-9b6bc118ee78
