@@ -53,6 +53,17 @@ class SigstoreSigningConfigTest {
     // check configs
   }
 
+  @Test
+  public void testFrom_noTsaConfig() throws SigstoreConfigurationException, IOException {
+    var signingConfig =
+        SigstoreSigningConfig.from(
+            Resources.getResource("dev/sigstore/trustroot/signing_config_no_tsa.v0.2.json")
+                .openStream());
+
+    Assertions.assertEquals(Selector.ANY, signingConfig.getTsaConfig().getSelector());
+    Assertions.assertTrue(signingConfig.getTsas().isEmpty());
+  }
+
   void assertServiceMatches(
       List<Service> serviceList, String url, int apiVersion, String startDate) {
     Assertions.assertEquals(1, serviceList.size());
