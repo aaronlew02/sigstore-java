@@ -35,6 +35,7 @@ import org.hamcrest.MatcherAssert;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 
@@ -127,6 +128,7 @@ public class KeylessSignerTest {
 
   @Test
   @EnabledIfOidcExists(provider = OidcProviderType.GITHUB)
+  @EnabledIfEnvironmentVariable(named = "GITHUB_REPOSITORY", matches = "sigstore/sigstore-java")
   // this test will only pass on the github.com/sigstore/sigstore-java repository
   public void sign_passGithubOidcCheck() throws Exception {
     var signer =
