@@ -21,7 +21,10 @@ import java.io.StringReader;
 import java.security.InvalidKeyException;
 import java.security.PublicKey;
 import java.security.Security;
+import java.util.Map;
+import org.bouncycastle.asn1.ASN1ObjectIdentifier;
 import org.bouncycastle.asn1.edec.EdECObjectIdentifiers;
+import org.bouncycastle.asn1.nist.NISTObjectIdentifiers;
 import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.crypto.params.ECKeyParameters;
@@ -39,6 +42,12 @@ public class Verifiers {
     Security.addProvider(new BouncyCastleProvider());
   }
 
+  private static final Map<ASN1ObjectIdentifier, String> ML_DSA_SCHEMES =
+      Map.of(
+          NISTObjectIdentifiers.id_ml_dsa_44, "ml-dsa-44/1",
+          NISTObjectIdentifiers.id_ml_dsa_65, "ml-dsa-65/1",
+          NISTObjectIdentifiers.id_ml_dsa_87, "ml-dsa-87/1");
+
   @FunctionalInterface
   public interface Supplier {
     Verifier newVerifier(Key key) throws IOException, InvalidKeyException;
@@ -55,6 +64,9 @@ public class Verifiers {
     }
     if (key.getKeyType().equals("ed25519") && key.getScheme().equals("ed25519")) {
       return new Ed25519Verifier(publicKey);
+    }
+    if (key.getKeyType().equals("ml-dsa") && key.getScheme().equals(mlDsaScheme(publicKey))) {
+      return new MlDsaVerifier(publicKey);
     }
     throw new InvalidKeyException(
         "Unsupported tuf key type and scheme combination: "
@@ -100,9 +112,28 @@ public class Verifiers {
               new AlgorithmIdentifier(EdECObjectIdentifiers.id_Ed25519), keyContents);
       JcaPEMKeyConverter converter = new JcaPEMKeyConverter();
       return converter.getPublicKey(params);
+    } else if (keyType.equals("ml-dsa")) {
+      try (PEMParser pemParser = new PEMParser(new StringReader(key.getKeyVal().get("public")))) {
+        var keyObj = pemParser.readObject();
+        if (keyObj instanceof SubjectPublicKeyInfo
+            && ML_DSA_SCHEMES.containsKey(
+                ((SubjectPublicKeyInfo) keyObj).getAlgorithm().getAlgorithm())) {
+          return new JcaPEMKeyConverter()
+              .setProvider(BouncyCastleProvider.PROVIDER_NAME)
+              .getPublicKey((SubjectPublicKeyInfo) keyObj);
+        }
+        throw new InvalidKeyException("Could not parse PEM section into ml-dsa public key");
+      } catch (DecoderException e) {
+        throw new InvalidKeyException("Could not parse PEM section in ml-dsa public key");
+      }
     } else {
       throw new InvalidKeyException("Unsupported tuf key type" + key.getKeyType());
     }
+  }
+
+  private static String mlDsaScheme(PublicKey publicKey) {
+    var algorithm = SubjectPublicKeyInfo.getInstance(publicKey.getEncoded()).getAlgorithm();
+    return ML_DSA_SCHEMES.get(algorithm.getAlgorithm());
   }
 
   // this is a hack to handle keytypes of ecdsa-sha2-nistp256
