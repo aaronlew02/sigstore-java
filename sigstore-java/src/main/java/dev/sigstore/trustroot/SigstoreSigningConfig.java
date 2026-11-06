@@ -58,7 +58,10 @@ public interface SigstoreSigningConfig {
         .addAllTLogs(protoToServiceList(proto.getRekorTlogUrlsList()))
         .addAllOidcProviders(protoToServiceList(proto.getOidcUrlsList()))
         .addAllTsas(protoToServiceList(proto.getTsaUrlsList()))
-        .tsaConfig(Service.Config.from(proto.getTsaConfig()))
+        .tsaConfig(
+            proto.hasTsaConfig() || proto.getTsaUrlsCount() > 0
+                ? Service.Config.from(proto.getTsaConfig())
+                : Service.Config.ofAny())
         .tLogConfig(Service.Config.from(proto.getRekorTlogConfig()))
         .build();
   }
