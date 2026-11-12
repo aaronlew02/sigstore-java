@@ -22,6 +22,8 @@ import com.google.errorprone.annotations.CheckReturnValue;
 import dev.sigstore.AlgorithmRegistry.HashAlgorithm;
 import dev.sigstore.KeylessVerificationException;
 import dev.sigstore.TrustedRootProvider;
+import dev.sigstore.common.json.JsonParseException;
+import dev.sigstore.dsse.InTotoPayload;
 import dev.sigstore.encryption.Hashers;
 import dev.sigstore.rekor.client.RekorParseException;
 import dev.sigstore.rekor.client.RekorVerificationException;
@@ -31,8 +33,13 @@ import dev.sigstore.v2.rekor.client.RekorVerifier;
 import dev.sigstore.v2.rekor.client.VerifierKey;
 import dev.sigstore.v2.rekor.client.WitnessPolicy;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Map;
+import java.util.stream.Collectors;
+import org.bouncycastle.util.encoders.DecoderException;
+import org.bouncycastle.util.encoders.Hex;
 
 /** Verify TransparencyLogProofs from rekor signed using the PQC keyless signing flow. */
 public class KeylessVerifier {
@@ -117,12 +124,65 @@ public class KeylessVerifier {
           "Could not parse the extra data in the transparency log proof: " + ex.getMessage(), ex);
     }
     policy.checkClaims(claims);
-    byte[] leafHash = IdentityLeaf.oidcLeafHash(artifactDigest, policy.getIssuer(), claims);
+
+    byte[] message = artifactDigest;
+    if (bundle.getPayload().isPresent()) {
+      var payload = bundle.getPayload().get();
+      checkDssePayload(payload, artifactDigest);
+      message = Hashers.from(HashAlgorithm.SHA2_256).hashBytes(payload.getPAE()).asBytes();
+    }
+
+    byte[] leafHash = IdentityLeaf.oidcLeafHash(message, policy.getIssuer(), claims);
+
     try {
       rekorVerifier.verifyProof(proof, leafHash);
     } catch (RekorVerificationException ex) {
       throw new KeylessVerificationException(
           "Transparency log inclusion proof could not be verified", ex);
+    }
+  }
+
+  private static void checkDssePayload(Bundle.Payload payload, byte[] artifactDigest)
+      throws KeylessVerificationException {
+    if (!InTotoPayload.PAYLOAD_TYPE.equals(payload.getPayloadType())) {
+      throw new KeylessVerificationException(
+          "DSSE payload must have payload type "
+              + InTotoPayload.PAYLOAD_TYPE
+              + ", but found '"
+              + payload.getPayloadType()
+              + "'");
+    }
+
+    InTotoPayload inTotoPayload;
+    try {
+      inTotoPayload = InTotoPayload.from(new String(payload.getPayload(), StandardCharsets.UTF_8));
+    } catch (JsonParseException jpe) {
+      throw new KeylessVerificationException("Could not parse DSSE payload", jpe);
+    }
+
+    if (inTotoPayload.getSubject().stream()
+        .noneMatch(subject -> matchesSha256(subject.getDigest().get("sha256"), artifactDigest))) {
+      var providedHashes =
+          inTotoPayload.getSubject().stream()
+              .map(s -> s.getDigest().getOrDefault("sha256", "no-sha256-hash"))
+              .collect(Collectors.joining(",", "[", "]"));
+      throw new KeylessVerificationException(
+          "Provided artifact digest does not match any subject sha256 digests in DSSE payload"
+              + "\nprovided(hex) : "
+              + Hex.toHexString(artifactDigest)
+              + "\nverification  : "
+              + providedHashes);
+    }
+  }
+
+  private static boolean matchesSha256(String subjectDigestHex, byte[] artifactDigest) {
+    if (subjectDigestHex == null) {
+      return false;
+    }
+    try {
+      return Arrays.equals(artifactDigest, Hex.decode(subjectDigestHex));
+    } catch (DecoderException ex) {
+      return false;
     }
   }
 }

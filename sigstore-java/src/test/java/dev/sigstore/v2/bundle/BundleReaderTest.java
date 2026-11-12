@@ -17,6 +17,7 @@ package dev.sigstore.v2.bundle;
 
 import com.google.common.io.Resources;
 import dev.sigstore.bundle.BundleParseException;
+import dev.sigstore.dsse.InTotoPayload;
 import java.io.InputStreamReader;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
@@ -29,6 +30,18 @@ class BundleReaderTest {
     var bundle = readBundle("dev/sigstore/v2/samples/bundles/bundle-staging.v2.sigstore.json");
     Assertions.assertEquals(Bundle.BUNDLE_V_2_0, bundle.getMediaType());
     Assertions.assertNotNull(bundle.getTransparencyLogProof());
+    Assertions.assertTrue(bundle.getPayload().isEmpty());
+  }
+
+  @Test
+  public void readDsseBundle() throws Exception {
+    var bundle = readBundle("dev/sigstore/v2/samples/bundles/bundle-dsse-staging.v2.sigstore.json");
+    var payload = bundle.getPayload().orElseThrow();
+    Assertions.assertEquals(InTotoPayload.PAYLOAD_TYPE, payload.getPayloadType());
+    var intotoPayload =
+        InTotoPayload.from(new String(payload.getPayload(), StandardCharsets.UTF_8));
+    Assertions.assertEquals(
+        "https://example.com/test-predicate/v1", intotoPayload.getPredicateType());
   }
 
   @Test

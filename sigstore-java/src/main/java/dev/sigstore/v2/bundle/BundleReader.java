@@ -37,10 +37,6 @@ class BundleReader {
           "Unsupported bundle media type: " + protoBundle.getMediaType());
     }
 
-    if (protoBundle.hasPayload()) {
-      throw new BundleParseException("DSSE bundles are not supported");
-    }
-
     if (!protoBundle.hasVerificationMaterial()
         || !protoBundle.getVerificationMaterial().hasTransparencyLogProof()) {
       throw new BundleParseException("Could not find transparencyLogProof in verificationMaterial");
@@ -59,9 +55,18 @@ class BundleReader {
       throw new BundleParseException("Failed to parse transparencyLogProof from bundle", e);
     }
 
-    return ImmutableBundle.builder()
-        .mediaType(protoBundle.getMediaType())
-        .transparencyLogProof(transparencyLogProof)
-        .build();
+    var bundleBuilder =
+        ImmutableBundle.builder()
+            .mediaType(protoBundle.getMediaType())
+            .transparencyLogProof(transparencyLogProof);
+    if (protoBundle.hasPayload()) {
+      var payloadProto = protoBundle.getPayload();
+      bundleBuilder.payload(
+          ImmutablePayload.builder()
+              .payloadType(payloadProto.getPayloadType())
+              .payload(payloadProto.getPayload().toByteArray())
+              .build());
+    }
+    return bundleBuilder.build();
   }
 }

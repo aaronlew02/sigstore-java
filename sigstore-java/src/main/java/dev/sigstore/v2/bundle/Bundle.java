@@ -16,6 +16,7 @@
 package dev.sigstore.v2.bundle;
 
 import dev.sigstore.bundle.BundleParseException;
+import dev.sigstore.bundle.ImmutableDsseEnvelope;
 import dev.sigstore.v2.rekor.client.TransparencyLogProof;
 import java.io.IOException;
 import java.io.Reader;
@@ -23,6 +24,7 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
 import org.immutables.value.Value.Default;
 import org.immutables.value.Value.Immutable;
 
@@ -43,6 +45,24 @@ public abstract class Bundle {
 
   /** The entry in the rekor transparency log. */
   public abstract TransparencyLogProof getTransparencyLogProof();
+
+  public abstract Optional<Payload> getPayload();
+
+  @Immutable
+  public interface Payload {
+
+    String getPayloadType();
+
+    byte[] getPayload();
+
+    default byte[] getPAE() {
+      return ImmutableDsseEnvelope.builder()
+          .payloadType(getPayloadType())
+          .payload(getPayload())
+          .build()
+          .getPAE();
+    }
+  }
 
   /** Read a json formatted bundle. */
   public static Bundle from(Reader bundleJson) throws BundleParseException {

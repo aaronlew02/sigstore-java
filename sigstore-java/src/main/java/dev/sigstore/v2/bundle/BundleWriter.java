@@ -55,8 +55,18 @@ class BundleWriter {
             .setTransparencyLogProof(transparencyLogProofProto)
             .build();
 
-    return dev.sigstore.proto.bundle.v2.Bundle.newBuilder()
-        .setMediaType(bundle.getMediaType())
-        .setVerificationMaterial(verificationMaterialProto);
+    var bundleBuilder =
+        dev.sigstore.proto.bundle.v2.Bundle.newBuilder()
+            .setMediaType(bundle.getMediaType())
+            .setVerificationMaterial(verificationMaterialProto);
+    bundle
+        .getPayload()
+        .ifPresent(
+            payload ->
+                bundleBuilder.setPayload(
+                    dev.sigstore.proto.bundle.v2.Payload.newBuilder()
+                        .setPayloadType(payload.getPayloadType())
+                        .setPayload(ByteString.copyFrom(payload.getPayload()))));
+    return bundleBuilder;
   }
 }

@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.apache.commons.lang3.StringUtils;
+import org.bouncycastle.util.encoders.Hex;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -97,6 +98,40 @@ public class KeylessTest {
       verifier.verify(artifactDigests.get(i), results.get(i), options);
       checkBundleSerialization(results.get(i));
     }
+  }
+
+  @Test
+  @DisabledIfSkipStaging
+  public void attest_staging() throws Exception {
+    var signer =
+        KeylessSigner.builder()
+            .sigstoreStagingDefaults()
+            .witnessPolicy(stagingWitnessPolicy)
+            .oidcClients(CONFORMANCE_TOKEN_CLIENT)
+            .build();
+    var artifactDigest = artifactDigests.get(0);
+    var payload =
+        "{\"_type\":\"https://in-toto.io/Statement/v1\","
+            + "\"subject\":[{\"name\":\"artifact0.e2e\",\"digest\":{\"sha256\":\""
+            + Hex.toHexString(artifactDigest)
+            + "\"}}],"
+            + "\"predicateType\":\"https://example.com/test-predicate/v1\","
+            + "\"predicate\":{}}";
+    var result = signer.attest(payload);
+
+    Assertions.assertEquals(
+        payload,
+        new String(result.getPayload().orElseThrow().getPayload(), StandardCharsets.UTF_8));
+
+    var verifier =
+        KeylessVerifier.builder()
+            .sigstoreStagingDefaults()
+            .witnessPolicy(stagingWitnessPolicy)
+            .build();
+    var policy = IdentityPolicy.builder().issuer(ISSUER).identity(IDENTITY).build();
+    var options = VerificationOptions.builder().identityPolicy(policy).build();
+    verifier.verify(artifactDigest, result, options);
+    checkBundleSerialization(result);
   }
 
   private void verifySigningResult(List<Bundle> results) {
