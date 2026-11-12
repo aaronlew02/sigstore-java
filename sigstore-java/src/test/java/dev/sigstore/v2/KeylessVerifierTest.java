@@ -23,7 +23,10 @@ import com.google.common.io.Resources;
 import dev.sigstore.KeylessVerificationException;
 import dev.sigstore.testkit.annotations.DisabledIfSkipStaging;
 import dev.sigstore.v2.bundle.Bundle;
+import dev.sigstore.v2.bundle.ImmutableBundle;
+import dev.sigstore.v2.bundle.ImmutablePayload;
 import dev.sigstore.v2.rekor.client.WitnessPolicy;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -41,6 +44,8 @@ public class KeylessVerifierTest {
   private static Path artifact;
   private static byte[] digest;
   private static Bundle bundle;
+  private static String dsseBundleJson;
+  private static Bundle dsseBundle;
 
   @BeforeAll
   public static void loadResources() throws Exception {
@@ -53,6 +58,12 @@ public class KeylessVerifierTest {
                 Resources.getResource(
                         "dev/sigstore/v2/samples/bundles/bundle-staging.v2.sigstore.json")
                     .toURI()));
+    dsseBundleJson =
+        Resources.toString(
+            Resources.getResource(
+                "dev/sigstore/v2/samples/bundles/bundle-dsse-staging.v2.sigstore.json"),
+            StandardCharsets.UTF_8);
+    dsseBundle = Bundle.from(new StringReader(dsseBundleJson));
   }
 
   @Test
@@ -181,5 +192,95 @@ public class KeylessVerifierTest {
         assertThrows(
             KeylessVerificationException.class, () -> verifier.verify(digest, bundle, options));
     assertTrue(ex.getMessage().contains("expected subject \"wrong@bar.com\""), ex.getMessage());
+  }
+
+  @Test
+  public void verifyDsse_withDigest() throws Exception {
+    var verifier =
+        KeylessVerifier.builder()
+            .sigstoreStagingDefaults()
+            .witnessPolicy(WitnessPolicy.NONE)
+            .build();
+    var policy = IdentityPolicy.builder().issuer(ISSUER).identity(IDENTITY).build();
+    var options = VerificationOptions.builder().identityPolicy(policy).build();
+
+    verifier.verify(digest, dsseBundle, options);
+  }
+
+  @Test
+  public void verifyDsse_artifactNotInSubjectsThrows() throws Exception {
+    var verifier =
+        KeylessVerifier.builder()
+            .sigstoreStagingDefaults()
+            .witnessPolicy(WitnessPolicy.NONE)
+            .build();
+    var policy = IdentityPolicy.builder().issuer(ISSUER).identity(IDENTITY).build();
+    var options = VerificationOptions.builder().identityPolicy(policy).build();
+    var otherDigest =
+        MessageDigest.getInstance("SHA-256")
+            .digest("other artifact".getBytes(StandardCharsets.UTF_8));
+
+    var ex =
+        assertThrows(
+            KeylessVerificationException.class,
+            () -> verifier.verify(otherDigest, dsseBundle, options));
+    assertTrue(
+        ex.getMessage()
+            .startsWith(
+                "Provided artifact digest does not match any subject sha256 digests in DSSE payload"),
+        ex.getMessage());
+  }
+
+  @Test
+  public void verifyDsse_wrongPayloadTypeThrows() throws Exception {
+    var wrongTypeBundle =
+        Bundle.from(
+            new StringReader(
+                dsseBundleJson.replace(
+                    "\"payloadType\": \"application/vnd.in-toto+json\"",
+                    "\"payloadType\": \"application/json\"")));
+    var verifier =
+        KeylessVerifier.builder()
+            .sigstoreStagingDefaults()
+            .witnessPolicy(WitnessPolicy.NONE)
+            .build();
+    var policy = IdentityPolicy.builder().issuer(ISSUER).identity(IDENTITY).build();
+    var options = VerificationOptions.builder().identityPolicy(policy).build();
+
+    var ex =
+        assertThrows(
+            KeylessVerificationException.class,
+            () -> verifier.verify(digest, wrongTypeBundle, options));
+    assertEquals(
+        "DSSE payload must have payload type application/vnd.in-toto+json, but found"
+            + " 'application/json'",
+        ex.getMessage());
+  }
+
+  @Test
+  public void verifyDsse_changedPayloadThrows() throws Exception {
+    var payload = dsseBundle.getPayload().orElseThrow();
+    var changedStatement =
+        new String(payload.getPayload(), StandardCharsets.UTF_8)
+            .replace("test-predicate", "other-predicate");
+    var changedBundle =
+        ImmutableBundle.copyOf(dsseBundle)
+            .withPayload(
+                ImmutablePayload.copyOf(payload)
+                    .withPayload(changedStatement.getBytes(StandardCharsets.UTF_8)));
+    var verifier =
+        KeylessVerifier.builder()
+            .sigstoreStagingDefaults()
+            .witnessPolicy(WitnessPolicy.NONE)
+            .build();
+    var policy = IdentityPolicy.builder().issuer(ISSUER).identity(IDENTITY).build();
+    var options = VerificationOptions.builder().identityPolicy(policy).build();
+
+    var ex =
+        assertThrows(
+            KeylessVerificationException.class,
+            () -> verifier.verify(digest, changedBundle, options));
+    assertEquals("Transparency log inclusion proof could not be verified", ex.getMessage());
+    assertEquals("Inclusion proof verification failed", ex.getCause().getMessage());
   }
 }

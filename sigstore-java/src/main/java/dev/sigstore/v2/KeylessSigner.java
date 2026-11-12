@@ -26,6 +26,8 @@ import dev.sigstore.AlgorithmRegistry.HashAlgorithm;
 import dev.sigstore.KeylessSignerException;
 import dev.sigstore.SigningConfigProvider;
 import dev.sigstore.TrustedRootProvider;
+import dev.sigstore.common.json.JsonParseException;
+import dev.sigstore.dsse.InTotoPayload;
 import dev.sigstore.encryption.Hashers;
 import dev.sigstore.oidc.client.OidcClients;
 import dev.sigstore.oidc.client.OidcException;
@@ -38,6 +40,7 @@ import dev.sigstore.trustroot.Service;
 import dev.sigstore.trustroot.SigstoreConfigurationException;
 import dev.sigstore.v2.bundle.Bundle;
 import dev.sigstore.v2.bundle.ImmutableBundle;
+import dev.sigstore.v2.bundle.ImmutablePayload;
 import dev.sigstore.v2.rekor.client.RekorClient;
 import dev.sigstore.v2.rekor.client.RekorClientHttp;
 import dev.sigstore.v2.rekor.client.RekorVerifier;
@@ -45,6 +48,7 @@ import dev.sigstore.v2.rekor.client.TransparencyLogProof;
 import dev.sigstore.v2.rekor.client.VerifierKey;
 import dev.sigstore.v2.rekor.client.WitnessPolicy;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -52,6 +56,8 @@ import java.util.Map;
 
 /** Sign artifact digests using the PQC keyless signing flow and return a Bundle. */
 public class KeylessSigner {
+
+  public static final String DEFAULT_INTOTO_PAYLOAD_TYPE = "https://in-toto.io/Statement/v1";
 
   private final RekorClient rekorClient;
   private final RekorVerifier rekorVerifier;
@@ -155,44 +161,12 @@ public class KeylessSigner {
       }
     }
 
-    OidcToken token;
-    try {
-      token = oidcClients.getIDToken();
-    } catch (OidcException ex) {
-      throw new KeylessSignerException("Failed to obtain OIDC token", ex);
-    }
-
+    var token = getIdToken();
     var result = ImmutableList.<Bundle>builder();
-
     for (var artifactDigest : artifactDigests) {
-      var oidc = OidcCredential.newBuilder().setToken(token.getIdToken()).build();
-      var message = ByteString.copyFrom(artifactDigest);
-      var req = IdentityRequestV001.newBuilder().setOidc(oidc).setMessage(message).build();
-
-      TransparencyLogProof proof;
-      try {
-        proof = rekorClient.putEntry(req);
-      } catch (IOException | RekorParseException ex) {
-        throw new KeylessSignerException("Failed to put entry in rekor", ex);
-      }
-
-      try {
-        var claims = proof.parseExtraData();
-        var issuer = claims.get("issuer");
-        if (issuer == null || !claims.containsKey("identity")) {
-          throw new KeylessSignerException(
-              "transparency log proof must have \"issuer\" and \"identity\" claims");
-        }
-        byte[] leafHash = IdentityLeaf.oidcLeafHash(artifactDigest, issuer, claims);
-        rekorVerifier.verifyProof(proof, leafHash);
-      } catch (RekorParseException | RekorVerificationException ex) {
-        throw new KeylessSignerException("Failed to validate rekor entry after signing", ex);
-      }
-
-      var bundle = ImmutableBundle.builder().transparencyLogProof(proof).build();
-      result.add(bundle);
+      var proof = putEntryAndCheck(token, artifactDigest);
+      result.add(ImmutableBundle.builder().transparencyLogProof(proof).build());
     }
-
     return result.build();
   }
 
@@ -245,5 +219,84 @@ public class KeylessSigner {
   @CheckReturnValue
   public Bundle signFile(Path artifact) throws KeylessSignerException {
     return signFiles(List.of(artifact)).get(artifact);
+  }
+
+  @CheckReturnValue
+  public Bundle attest(String payload) throws KeylessSignerException {
+    if (payload == null || payload.isEmpty()) {
+      throw new IllegalArgumentException("Payload must be non-empty");
+    }
+
+    InTotoPayload inTotoPayload;
+    try {
+      inTotoPayload = InTotoPayload.from(payload);
+    } catch (JsonParseException jse) {
+      throw new IllegalArgumentException("Payload is not a valid in-toto statement");
+    }
+
+    if (!inTotoPayload.getType().equals(DEFAULT_INTOTO_PAYLOAD_TYPE)) {
+      throw new IllegalArgumentException(
+          "Payload must be of type \""
+              + DEFAULT_INTOTO_PAYLOAD_TYPE
+              + "\" but was \""
+              + inTotoPayload.getType()
+              + "\"");
+    }
+
+    if (inTotoPayload.getSubject() == null || inTotoPayload.getSubject().isEmpty()) {
+      throw new IllegalArgumentException("Payload must contain at least one subject");
+    }
+
+    for (var subject : inTotoPayload.getSubject()) {
+      if (subject.getName() != null && !subject.getName().isEmpty()) {
+        continue;
+      }
+      throw new IllegalArgumentException("Payload must contain at least one non-empty subject");
+    }
+
+    var dssePayload =
+        ImmutablePayload.builder()
+            .payloadType(InTotoPayload.PAYLOAD_TYPE)
+            .payload(payload.getBytes(StandardCharsets.UTF_8))
+            .build();
+    var paeDigest = Hashers.from(HashAlgorithm.SHA2_256).hashBytes(dssePayload.getPAE()).asBytes();
+    var proof = putEntryAndCheck(getIdToken(), paeDigest);
+    return ImmutableBundle.builder().transparencyLogProof(proof).payload(dssePayload).build();
+  }
+
+  private OidcToken getIdToken() throws KeylessSignerException {
+    try {
+      return oidcClients.getIDToken();
+    } catch (OidcException ex) {
+      throw new KeylessSignerException("Failed to obtain OIDC token", ex);
+    }
+  }
+
+  private TransparencyLogProof putEntryAndCheck(OidcToken token, byte[] digest)
+      throws KeylessSignerException {
+    var oidc = OidcCredential.newBuilder().setToken(token.getIdToken()).build();
+    var message = ByteString.copyFrom(digest);
+    var req = IdentityRequestV001.newBuilder().setOidc(oidc).setMessage(message).build();
+
+    TransparencyLogProof proof;
+    try {
+      proof = rekorClient.putEntry(req);
+    } catch (IOException | RekorParseException ex) {
+      throw new KeylessSignerException("Failed to put entry in rekor", ex);
+    }
+
+    try {
+      var claims = proof.parseExtraData();
+      var issuer = claims.get("issuer");
+      if (issuer == null || !claims.containsKey("identity")) {
+        throw new KeylessSignerException(
+            "transparency log proof must have \"issuer\" and \"identity\" claims");
+      }
+      byte[] leafHash = IdentityLeaf.oidcLeafHash(digest, issuer, claims);
+      rekorVerifier.verifyProof(proof, leafHash);
+    } catch (RekorParseException | RekorVerificationException ex) {
+      throw new KeylessSignerException("Failed to validate rekor entry after signing", ex);
+    }
+    return proof;
   }
 }
