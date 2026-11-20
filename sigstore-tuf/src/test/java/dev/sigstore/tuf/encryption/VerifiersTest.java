@@ -27,6 +27,7 @@ public class VerifiersTest {
 
   static final String RSA_PUB_PATH = "dev/sigstore/samples/keys/test-rsa.pub";
   static final String EC_PUB_PATH = "dev/sigstore/samples/keys/test-ec.pub";
+  static final String MLDSA_PUB_PATH = "dev/sigstore/samples/keys/test-mldsa.pub";
 
   @Test
   public void newVerifierRSA() throws Exception {
@@ -112,6 +113,37 @@ public class VerifiersTest {
                 Map.of(
                     "public", "2d7218ce609f85de4b0d29d9e679cfd73e96756652f7069a0cf00acb752e5d3c"))
             .scheme("ed25519junk")
+            .build();
+    Assertions.assertThrows(InvalidKeyException.class, () -> Verifiers.newVerifier(key));
+  }
+
+  @Test
+  public void newVerifierMlDsa() throws Exception {
+    var key =
+        ImmutableKey.builder()
+            .keyType("ml-dsa")
+            .keyVal(
+                Map.of(
+                    "public",
+                    Resources.toString(
+                        Resources.getResource(MLDSA_PUB_PATH), StandardCharsets.UTF_8)))
+            .scheme("ml-dsa-44/1")
+            .build();
+    var verifier = Verifiers.newVerifier(key);
+    Assertions.assertTrue(verifier instanceof MlDsaVerifier);
+  }
+
+  @Test
+  public void newVerifierMlDsa_unsupportedScheme() throws Exception {
+    var key =
+        ImmutableKey.builder()
+            .keyType("ml-dsa")
+            .keyVal(
+                Map.of(
+                    "public",
+                    Resources.toString(
+                        Resources.getResource(MLDSA_PUB_PATH), StandardCharsets.UTF_8)))
+            .scheme("ml-dsa-44/2")
             .build();
     Assertions.assertThrows(InvalidKeyException.class, () -> Verifiers.newVerifier(key));
   }
